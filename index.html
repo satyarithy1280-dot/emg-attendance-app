@@ -81,7 +81,7 @@
   var diagSent = false;
   function diag(stage) {
     if (diagSent || !initData) return; diagSent = true;
-    try { call({ action: 'diag', diag: { stage: stage, platform: tg ? tg.platform : '-', version: tg ? tg.version : '-', cam: stream ? 'ok' : (camErrRaw || camErr || 'not started'),
+    try { call({ action: 'diag', diag: { stage: stage, platform: tg ? tg.platform : '-', version: tg ? tg.version : '-', cam: stream ? 'ok' : (camErrRaw || camErr || 'not started (no tap?)'),
       gps: fix ? 'ok ±' + fix.acc + 'm' : (gpsErr || 'waiting'), gpsSrc: gpsSrc || 'browser', secure: String(window.isSecureContext), ua: navigator.userAgent } }).catch(function () {}); } catch (e) {}
   }
   var exempt = function () { return !!(info && info.exempt); };
@@ -141,12 +141,28 @@
     }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
   }
 
+  // Same call as the camera test page that works on Android: plain constraints, only ever from a tap,
+  // never two permission requests at once (Android Telegram silently parks a request made without a tap).
+  var camPending = null;
   function startCam() {
     if (stream) return Promise.resolve();
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camErr = 'មិនគាំទ្រ'; refresh(); return Promise.resolve(); }
-    return navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 1280 } }, audio: false })
-      .then(function (s) { stream = s; camErr = ''; var v = $('video'); v.srcObject = s; try { v.play(); } catch (e) {} refresh(); })
-      .catch(function (e) { camErr = (e && e.name === 'NotAllowedError') ? 'មិនបានអនុញ្ញាត' : (e && e.name || 'error'); camErrRaw = (e && (e.name + ': ' + e.message)) || 'error'; refresh(); });
+    if (camPending) return camPending;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camErr = 'មិនគាំទ្រ'; camErrRaw = 'getUserMedia unsupported'; refresh(); return Promise.resolve(); }
+    camErr = ''; camErrRaw = 'pending';
+    var timer = setTimeout(function () {
+      if (!stream) { camErr = 'គ្មានចម្លើយ'; camErrRaw = 'pending >10s (no answer)'; refresh();
+        showMsg('⚠️ កាមេរ៉ាមិនឆ្លើយតប។ សូមបិទកម្មវិធីនេះ ហើយបើកម្តងទៀត រួចចុច ▶។', true); }
+    }, 10000);
+    camPending = navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+      .then(function (s) { clearTimeout(timer); stream = s; camErr = ''; camErrRaw = ''; hideMsg(); var v = $('video'); v.srcObject = s; try { var pp = v.play(); if (pp && pp.catch) pp.catch(function () {}); } catch (e) {} refresh(); })
+      .catch(function (e) { clearTimeout(timer); camErr = (e && e.name === 'NotAllowedError') ? 'មិនបានអនុញ្ញាត' : (e && e.name || 'error'); camErrRaw = (e && (e.name + ': ' + e.message)) || 'error'; refresh(); })
+      .then(function () { camPending = null; });
+    return camPending;
+  }
+  function startAll() { return startCam().then(function () { startGps(); }); }   // one prompt at a time
+  function permState(name) {
+    try { return navigator.permissions.query({ name: name }).then(function (r) { return r.state; }, function () { return 'unknown'; }); }
+    catch (e) { return Promise.resolve('unknown'); }
   }
 
   function capture() {
@@ -168,7 +184,7 @@
 
   $('shutter').addEventListener('click', function () {
     if (busy) return;
-    if (!stream) { hideMsg(); startCam(); startGps(); setTimeout(function () { if (!stream || (!fix && !exempt())) diag('after-tap 8s'); }, 8000); return; }  // first tap = user gesture → permission prompts work
+    if (!stream) { hideMsg(); startAll(); setTimeout(function () { if (!stream || (!fix && !exempt())) diag('after-tap 8s'); }, 8000); return; }  // first tap = user gesture → permission prompts work
     if (!exempt() && !fix) return;
     busy = true; refresh(); hideMsg();
     var photo = capture();
@@ -193,7 +209,8 @@
   refresh();
   if (!initData) { showMsg('សូមបើកទំព័រនេះពីក្នុង Telegram (ប៊ូតុង /checkin ឬ /checkout)។', true); $('shutter').disabled = true; return; }
 
-  startCam(); startGps();   // try silently; if the WebView needs a tap, the button does it
+  // Auto-start only when permission was already granted earlier (no prompt needed) — otherwise wait for the tap.
+  permState('camera').then(function (st) { if (st === 'granted') startAll(); });
   call({ action: 'prep', evt: evt }).then(function (r) {
     if (!r.ok) { showMsg(r.msg, true); haptic('error'); return; }
     info = r; evt = r.evt;
