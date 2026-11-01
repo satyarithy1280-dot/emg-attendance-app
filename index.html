@@ -24,7 +24,10 @@
   .msg.err{background:#fde8e8;color:#9b1c1c}
   .done{text-align:center;padding-top:40px}
   .done .big{font-size:64px}
-  .hidden{display:none}
+  .camhint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:15px;text-align:center;padding:20px}
+  .stat{display:flex;justify-content:space-between;gap:8px;margin-top:8px;font-size:13px;color:var(--hint)}
+  .link{display:block;width:100%;margin-top:8px;padding:10px;border:1px solid var(--btn);border-radius:12px;background:transparent;color:var(--btn);font-size:15px}
+  .hidden{display:none !important}
   .spin{display:inline-block;width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:s .7s linear infinite;vertical-align:-3px;margin-right:6px}
   @keyframes s{to{transform:rotate(360deg)}}
 </style>
@@ -37,9 +40,12 @@
     <div class="cam">
       <video id="video" playsinline autoplay muted></video>
       <canvas class="snap" id="snap"></canvas>
-      <div class="pill wait" id="pill"><span class="spin"></span>កំពុងស្វែងរកទីតាំង…</div>
+      <div class="pill wait" id="pill">📍 —</div>
+      <div class="camhint" id="camhint">📷 ចុចប៊ូតុងខាងក្រោម ដើម្បីបើកកាមេរ៉ា</div>
     </div>
-    <button class="shutter" id="shutter" disabled>📸 ថតរូប និងកត់ត្រា</button>
+    <div class="stat"><span id="sCam">📷 កាមេរ៉ា៖ —</span><span id="sGps">📍 ទីតាំង៖ —</span></div>
+    <button class="shutter" id="shutter">▶ បើកកាមេរ៉ា + ទីតាំង</button>
+    <button class="link hidden" id="settings">⚙️ បើកការកំណត់ Telegram (អនុញ្ញាតទីតាំង)</button>
     <div class="msg hidden" id="msg"></div>
   </div>
   <div id="done" class="done hidden">
@@ -49,61 +55,92 @@
 </div>
 <script>
 (function () {
-  // Apps Script web app (public endpoint; every request is authenticated server-side by Telegram's signed initData)
   var API = 'https://script.google.com/macros/s/AKfycbwcAxTJ08_dQ9WvD4Fcq8BZPl813JBfl4ZcEq1sZ9-n01VVjltAH2ERIBv_pet3RbhjmQ/exec?mode=app';
   var tg = window.Telegram && Telegram.WebApp;
   var $ = function (id) { return document.getElementById(id); };
-  var info = null, fix = null, busy = false, stream = null;
+  var info = null, fix = null, busy = false, stream = null, gpsSrc = '', watchId = null, tgPoll = null, camErr = '', gpsErr = '';
   var initData = tg ? tg.initData : '';
   var start = tg && tg.initDataUnsafe ? (tg.initDataUnsafe.start_param || '') : '';
   var q = new URLSearchParams(location.search);
   var evt = (q.get('evt') || start || 'in').toLowerCase() === 'out' ? 'out' : 'in';
-
   if (tg) { tg.ready(); tg.expand(); }
 
   function haptic(t) { try { tg.HapticFeedback.notificationOccurred(t); } catch (e) {} }
   function showMsg(text, err) { var m = $('msg'); m.textContent = text; m.className = 'msg' + (err ? ' err' : ''); }
   function hideMsg() { $('msg').className = 'msg hidden'; }
-
   function call(body) {
     body.initData = initData;
     return fetch(API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow' })
       .then(function (r) { return r.json(); });
   }
-
   function dist(a, b, c, d) {
     var R = 6371000, r = Math.PI / 180, x = (c - a) * r, y = (d - b) * r;
     var h = Math.sin(x / 2) * Math.sin(x / 2) + Math.cos(a * r) * Math.cos(c * r) * Math.sin(y / 2) * Math.sin(y / 2);
     return Math.round(2 * R * Math.asin(Math.sqrt(h)));
   }
+  var exempt = function () { return !!(info && info.exempt); };
 
   function refresh() {
-    var pill = $('pill'), ok = false;
-    if (!fix) { pill.className = 'pill wait'; pill.innerHTML = '<span class="spin"></span>កំពុងស្វែងរកទីតាំង…'; }
+    var pill = $('pill'), gpsOk = false;
+    if (exempt()) {
+      pill.className = 'pill ok';
+      pill.textContent = '🔓 Admin — មិនពិនិត្យទីតាំង' + (fix && info ? ' (' + dist(fix.lat, fix.lon, info.lat, info.lon) + 'm)' : '');
+      gpsOk = true;
+    } else if (!fix) { pill.className = 'pill wait'; pill.innerHTML = gpsErr ? '📍 គ្មានទីតាំង' : '<span class="spin"></span>កំពុងស្វែងរកទីតាំង…'; }
     else if (!info) { pill.className = 'pill wait'; pill.textContent = '📍 ±' + fix.acc + 'm'; }
     else {
       var d = dist(fix.lat, fix.lon, info.lat, info.lon);
       if (fix.acc > info.maxAcc) { pill.className = 'pill bad'; pill.textContent = '📍 GPS មិនច្បាស់ ±' + fix.acc + 'm'; }
       else if (d > info.radius) { pill.className = 'pill bad'; pill.textContent = '📍 ឆ្ងាយ ' + d + 'm (≤' + info.radius + 'm)'; }
-      else { pill.className = 'pill ok'; pill.textContent = '📍 នៅសាខា ' + d + 'm ✓'; ok = true; }
+      else { pill.className = 'pill ok'; pill.textContent = '📍 នៅសាខា ' + d + 'm ✓'; gpsOk = true; }
     }
-    $('shutter').disabled = !(ok && stream && info && !busy);
+    $('sCam').textContent = '📷 កាមេរ៉ា៖ ' + (stream ? '✅' : (camErr ? '❌ ' + camErr : '—'));
+    $('sGps').textContent = '📍 ទីតាំង៖ ' + (fix ? '✅ ±' + fix.acc + 'm' + (gpsSrc ? ' (' + gpsSrc + ')' : '') : (gpsErr ? '❌ ' + gpsErr : '…'));
+    $('camhint').style.display = stream ? 'none' : 'flex';
+    var sh = $('shutter');
+    if (busy) { sh.disabled = true; return; }
+    if (!stream) { sh.disabled = false; sh.textContent = '▶ បើកកាមេរ៉ា + ទីតាំង'; return; }
+    sh.textContent = '📸 ថតរូប និងកត់ត្រា';
+    sh.disabled = !(info && gpsOk);
+  }
+
+  function setFix(lat, lon, acc, src) { fix = { lat: lat, lon: lon, acc: Math.round(acc || 0) }; gpsSrc = src; gpsErr = ''; $('settings').className = 'link hidden'; refresh(); }
+
+  // Telegram's own location service (Bot API 8.0+) — used when the WebView geolocation is blocked.
+  function tgLocation() {
+    var lm = tg && tg.LocationManager;
+    if (!lm) { gpsErr = 'សូមអនុញ្ញាត Location ឱ្យ Telegram'; refresh(); return; }
+    var get = function () {
+      if (!lm.isLocationAvailable) { gpsErr = 'ទូរស័ព្ទមិនមាន GPS'; refresh(); return; }
+      lm.getLocation(function (loc) {
+        if (loc) { setFix(loc.latitude, loc.longitude, loc.horizontal_accuracy, 'Telegram'); if (!tgPoll) tgPoll = setInterval(get, 8000); }
+        else {
+          gpsErr = 'មិនបានអនុញ្ញាតទីតាំង'; refresh();
+          if (lm.isAccessRequested && !lm.isAccessGranted) $('settings').className = 'link';
+        }
+      });
+    };
+    if (lm.isInited) get(); else lm.init(get);
   }
 
   function startGps() {
-    if (!navigator.geolocation) { showMsg('ឧបករណ៍នេះមិនគាំទ្រ GPS ទេ។', true); return; }
-    navigator.geolocation.watchPosition(function (p) {
-      fix = { lat: p.coords.latitude, lon: p.coords.longitude, acc: Math.round(p.coords.accuracy) }; refresh();
+    if (watchId !== null || tgPoll) return;
+    if (!navigator.geolocation) return tgLocation();
+    watchId = navigator.geolocation.watchPosition(function (p) {
+      setFix(p.coords.latitude, p.coords.longitude, p.coords.accuracy, '');
     }, function (e) {
-      showMsg(e.code === 1 ? '⚠️ សូមអនុញ្ញាតឱ្យ Telegram ប្រើទីតាំង (Location) រួចបើកម្តងទៀត។' : '⚠️ រកទីតាំងមិនឃើញ។ សូមបើក GPS ហើយចេញទៅក្បែរបង្អួច។', true);
+      try { navigator.geolocation.clearWatch(watchId); } catch (x) {}
+      watchId = null;
+      if (!fix) tgLocation();
     }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
   }
 
   function startCam() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { showMsg('ឧបករណ៍នេះមិនគាំទ្រកាមេរ៉ាទេ។ សូមប្រើវិធីចាស់ (Live Location → Selfie)។', true); return; }
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 1280 } }, audio: false })
-      .then(function (s) { stream = s; $('video').srcObject = s; refresh(); })
-      .catch(function () { showMsg('⚠️ សូមអនុញ្ញាតឱ្យ Telegram ប្រើកាមេរ៉ា រួចបើកម្តងទៀត។', true); });
+    if (stream) return Promise.resolve();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camErr = 'មិនគាំទ្រ'; refresh(); return Promise.resolve(); }
+    return navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 1280 } }, audio: false })
+      .then(function (s) { stream = s; camErr = ''; var v = $('video'); v.srcObject = s; try { v.play(); } catch (e) {} refresh(); })
+      .catch(function (e) { camErr = (e && e.name === 'NotAllowedError') ? 'មិនបានអនុញ្ញាត' : (e && e.name || 'error'); refresh(); });
   }
 
   function capture() {
@@ -115,38 +152,48 @@
     return c.toDataURL('image/jpeg', 0.75);
   }
 
+  function stopAll() {
+    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+    if (watchId !== null) try { navigator.geolocation.clearWatch(watchId); } catch (e) {}
+    if (tgPoll) clearInterval(tgPoll);
+  }
+
+  $('settings').addEventListener('click', function () { try { tg.LocationManager.openSettings(); } catch (e) {} });
+
   $('shutter').addEventListener('click', function () {
-    if (busy || !fix) return;
+    if (busy) return;
+    if (!stream) { hideMsg(); startCam(); startGps(); return; }  // first tap = user gesture → permission prompts work
+    if (!exempt() && !fix) return;
     busy = true; refresh(); hideMsg();
     var photo = capture();
     try { tg.HapticFeedback.impactOccurred('medium'); } catch (e) {}
     $('shutter').innerHTML = '<span class="spin"></span>កំពុងកត់ត្រា…';
-    call({ action: 'punch', evt: evt, lat: fix.lat, lon: fix.lon, acc: fix.acc, photo: photo }).then(function (r) {
+    var body = { action: 'punch', evt: evt, photo: photo };
+    if (fix) { body.lat = fix.lat; body.lon = fix.lon; body.acc = fix.acc; }
+    call(body).then(function (r) {
       if (r.ok) {
-        haptic('success');
-        if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+        haptic('success'); stopAll();
         $('main').className = 'hidden'; $('done').className = 'done'; $('doneMsg').textContent = r.msg;
         setTimeout(function () { if (tg) tg.close(); }, 2500);
       } else {
-        haptic('error'); showMsg(r.msg, true); $('snap').style.display = 'none';
-        busy = false; $('shutter').textContent = '📸 ថតម្តងទៀត'; refresh();
+        haptic('error'); showMsg(r.msg, true); $('snap').style.display = 'none'; busy = false; refresh();
       }
     }).catch(function () {
-      haptic('error'); showMsg('⚠️ បណ្តាញមានបញ្ហា។ សូមព្យាយាមម្តងទៀត។', true); $('snap').style.display = 'none';
-      busy = false; $('shutter').textContent = '📸 ថតម្តងទៀត'; refresh();
+      haptic('error'); showMsg('⚠️ បណ្តាញមានបញ្ហា។ សូមព្យាយាមម្តងទៀត។', true); $('snap').style.display = 'none'; busy = false; refresh();
     });
   });
 
   $('title').textContent = evt === 'out' ? '📸 ចេញពីធ្វើការ' : '📸 ចូលធ្វើការ';
-  if (!initData) { showMsg('សូមបើកទំព័រនេះពីក្នុង Telegram (ប៊ូតុង /checkin ឬ /checkout)។', true); return; }
+  refresh();
+  if (!initData) { showMsg('សូមបើកទំព័រនេះពីក្នុង Telegram (ប៊ូតុង /checkin ឬ /checkout)។', true); $('shutter').disabled = true; return; }
 
-  startCam(); startGps();
+  startCam(); startGps();   // try silently; if the WebView needs a tap, the button does it
   call({ action: 'prep', evt: evt }).then(function (r) {
     if (!r.ok) { showMsg(r.msg, true); haptic('error'); return; }
     info = r; evt = r.evt;
     $('title').textContent = '📸 ' + r.evtKh + ' — ' + r.name;
-    $('sub').textContent = r.branchKh + ' · ចម្ងាយអនុញ្ញាត ' + r.radius + 'm';
-    if (r.already) { showMsg(r.already, true); $('shutter').classList.add('hidden'); if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+    $('sub').textContent = r.branchKh + (r.exempt ? ' · 🔓 Admin (គ្មានការកំណត់ចម្ងាយ)' : ' · ចម្ងាយអនុញ្ញាត ' + r.radius + 'm');
+    if (r.already) { showMsg(r.already, true); $('shutter').classList.add('hidden'); stopAll(); return; }
     refresh();
   }).catch(function () { showMsg('⚠️ មិនអាចភ្ជាប់ទៅម៉ាស៊ីនមេបានទេ។ សូមព្យាយាមម្តងទៀត។', true); });
 })();
