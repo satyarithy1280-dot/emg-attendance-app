@@ -58,11 +58,11 @@
   var API = 'https://script.google.com/macros/s/AKfycbwcAxTJ08_dQ9WvD4Fcq8BZPl813JBfl4ZcEq1sZ9-n01VVjltAH2ERIBv_pet3RbhjmQ/exec?mode=app';
   var tg = window.Telegram && Telegram.WebApp;
   var $ = function (id) { return document.getElementById(id); };
-  var info = null, fix = null, busy = false, stream = null, gpsSrc = '', watchId = null, tgPoll = null, camErr = '', gpsErr = '';
+  var camErrRaw = '', info = null, fix = null, busy = false, stream = null, gpsSrc = '', watchId = null, tgPoll = null, camErr = '', gpsErr = '';
   var initData = tg ? tg.initData : '';
   var start = tg && tg.initDataUnsafe ? (tg.initDataUnsafe.start_param || '') : '';
   var q = new URLSearchParams(location.search);
-  var evt = (q.get('evt') || start || 'in').toLowerCase() === 'out' ? 'out' : 'in';
+  var evt0 = (q.get('evt') || start || '').toLowerCase(); var evt = evt0 === 'out' ? 'out' : (evt0 === 'in' ? 'in' : '');
   if (tg) { tg.ready(); tg.expand(); }
 
   function haptic(t) { try { tg.HapticFeedback.notificationOccurred(t); } catch (e) {} }
@@ -77,6 +77,12 @@
     var R = 6371000, r = Math.PI / 180, x = (c - a) * r, y = (d - b) * r;
     var h = Math.sin(x / 2) * Math.sin(x / 2) + Math.cos(a * r) * Math.cos(c * r) * Math.sin(y / 2) * Math.sin(y / 2);
     return Math.round(2 * R * Math.asin(Math.sqrt(h)));
+  }
+  var diagSent = false;
+  function diag(stage) {
+    if (diagSent || !initData) return; diagSent = true;
+    try { call({ action: 'diag', diag: { stage: stage, platform: tg ? tg.platform : '-', version: tg ? tg.version : '-', cam: stream ? 'ok' : (camErrRaw || camErr || 'not started'),
+      gps: fix ? 'ok ±' + fix.acc + 'm' : (gpsErr || 'waiting'), gpsSrc: gpsSrc || 'browser', secure: String(window.isSecureContext), ua: navigator.userAgent } }).catch(function () {}); } catch (e) {}
   }
   var exempt = function () { return !!(info && info.exempt); };
 
@@ -140,7 +146,7 @@
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camErr = 'មិនគាំទ្រ'; refresh(); return Promise.resolve(); }
     return navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 1280 } }, audio: false })
       .then(function (s) { stream = s; camErr = ''; var v = $('video'); v.srcObject = s; try { v.play(); } catch (e) {} refresh(); })
-      .catch(function (e) { camErr = (e && e.name === 'NotAllowedError') ? 'មិនបានអនុញ្ញាត' : (e && e.name || 'error'); refresh(); });
+      .catch(function (e) { camErr = (e && e.name === 'NotAllowedError') ? 'មិនបានអនុញ្ញាត' : (e && e.name || 'error'); camErrRaw = (e && (e.name + ': ' + e.message)) || 'error'; refresh(); });
   }
 
   function capture() {
@@ -162,7 +168,7 @@
 
   $('shutter').addEventListener('click', function () {
     if (busy) return;
-    if (!stream) { hideMsg(); startCam(); startGps(); return; }  // first tap = user gesture → permission prompts work
+    if (!stream) { hideMsg(); startCam(); startGps(); setTimeout(function () { if (!stream || (!fix && !exempt())) diag('after-tap 8s'); }, 8000); return; }  // first tap = user gesture → permission prompts work
     if (!exempt() && !fix) return;
     busy = true; refresh(); hideMsg();
     var photo = capture();
@@ -183,7 +189,7 @@
     });
   });
 
-  $('title').textContent = evt === 'out' ? '📸 ចេញពីធ្វើការ' : '📸 ចូលធ្វើការ';
+  $('title').textContent = evt === 'out' ? '📸 ចេញពីធ្វើការ' : (evt === 'in' ? '📸 ចូលធ្វើការ' : '📸 វត្តមាន');
   refresh();
   if (!initData) { showMsg('សូមបើកទំព័រនេះពីក្នុង Telegram (ប៊ូតុង /checkin ឬ /checkout)។', true); $('shutter').disabled = true; return; }
 
