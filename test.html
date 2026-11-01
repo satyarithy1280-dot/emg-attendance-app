@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>EMG Attendance — Camera + GPS test</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  body{font-family:system-ui,-apple-system,"Noto Sans Khmer","Khmer OS",sans-serif;margin:0;padding:16px;background:var(--tg-theme-bg-color,#0e1621);color:var(--tg-theme-text-color,#e9eef4)}
+  h3{margin:0 0 12px}
+  button{width:100%;padding:14px;border:0;border-radius:12px;background:var(--tg-theme-button-color,#2aa7ff);color:var(--tg-theme-button-text-color,#fff);font-size:17px;font-weight:600}
+  video{width:100%;max-height:300px;border-radius:12px;background:#000;margin:12px 0;transform:scaleX(-1);object-fit:cover}
+  .row{padding:10px 12px;border-radius:10px;background:var(--tg-theme-secondary-bg-color,#182533);margin:8px 0;font-size:15px}
+  .ok{color:#3fbf72}.bad{color:#ff6b6b}.mut{opacity:.7;font-size:13px}
+</style>
+</head>
+<body>
+<h3>📸 សាកល្បងកាមេរ៉ា + GPS (v2)</h3>
+<button id="go">ចាប់ផ្តើមសាកល្បង</button>
+<video id="v" autoplay playsinline muted></video>
+<div class="row">កាមេរ៉ាមុខ៖ <b id="cam">—</b></div>
+<div class="row">GPS (browser)៖ <b id="gps">—</b></div>
+<div class="row">GPS (Telegram)៖ <b id="tgl">—</b></div>
+<div class="row">អ្នកប្រើ Telegram៖ <b id="who">—</b></div>
+<div class="row mut" id="env"></div>
+<script>
+const tg = window.Telegram && Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const set = (id, ok, txt) => { const el = document.getElementById(id); el.className = ok ? 'ok' : 'bad'; el.textContent = (ok ? '✅ ' : '❌ ') + txt; };
+const u = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+if (u) set('who', true, (u.first_name || '') + ' (ID ' + u.id + ')'); else set('who', false, 'មិនស្គាល់ (initData ទទេ)');
+document.getElementById('env').textContent = 'Platform: ' + (tg ? tg.platform : 'no-telegram') + ' · WebApp ' + (tg ? tg.version : '-') +
+  ' · ' + (window.isSecureContext ? 'secure' : 'NOT secure') + ' · in iframe: ' + (window.top !== window.self);
+document.getElementById('go').onclick = async () => {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+    document.getElementById('v').srcObject = s; set('cam', true, 'ប្រើបាន');
+  } catch (e) { set('cam', false, e.name); }
+  await new Promise((done) => {
+    if (!navigator.geolocation) { set('gps', false, 'unsupported'); return done(); }
+    navigator.geolocation.getCurrentPosition(
+      (p) => { set('gps', true, p.coords.latitude.toFixed(5) + ', ' + p.coords.longitude.toFixed(5) + ' (±' + Math.round(p.coords.accuracy) + 'm)'); done(); },
+      (e) => { set('gps', false, 'error ' + e.code + ' ' + e.message); done(); },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  });
+  await new Promise((done) => {
+    const lm = tg && tg.LocationManager;
+    if (!lm) { set('tgl', false, 'មិនមាន (WebApp ' + (tg ? tg.version : '-') + ')'); return done(); }
+    lm.init(() => {
+      if (!lm.isLocationAvailable) { set('tgl', false, 'unavailable'); return done(); }
+      lm.getLocation((loc) => {
+        if (loc) set('tgl', true, loc.latitude.toFixed(5) + ', ' + loc.longitude.toFixed(5) + ' (±' + Math.round(loc.horizontal_accuracy || 0) + 'm)');
+        else set('tgl', false, 'denied');
+        done();
+      });
+    });
+  });
+};
+</script>
+</body>
+</html>
