@@ -62,7 +62,8 @@
   var initData = tg ? tg.initData : '';
   var start = tg && tg.initDataUnsafe ? (tg.initDataUnsafe.start_param || '') : '';
   var q = new URLSearchParams(location.search);
-  var evt0 = (q.get('evt') || start || '').toLowerCase(); var evt = evt0 === 'out' ? 'out' : (evt0 === 'in' ? 'in' : '');
+  var evt0 = (q.get('evt') || start || '').toLowerCase(); var evt = /^out/.test(evt0) ? 'out' : (/^in/.test(evt0) ? 'in' : '');
+  var wantBranch = (q.get('b') || ((start.match(/_(B\d)$/i) || [])[1]) || '').toUpperCase();
   if (tg) { tg.ready(); tg.expand(); }
 
   function haptic(t) { try { tg.HapticFeedback.notificationOccurred(t); } catch (e) {} }
@@ -86,7 +87,18 @@
   }
   var exempt = function () { return !!(info && info.exempt); };
 
+  // Staff allowed at several branches: follow the nearest shop while GPS updates.
+  function pickNearest() {
+    if (!info || info.fixed || !info.branches || info.branches.length < 2 || !fix) return;
+    var best = null;
+    info.branches.forEach(function (b) { var d = dist(fix.lat, fix.lon, b.lat, b.lon); if (!best || d < best.d) best = { b: b, d: d }; });
+    if (best && best.b.code !== info.branch) {
+      info.branch = best.b.code; info.lat = best.b.lat; info.lon = best.b.lon; info.radius = best.b.radius; info.branchKh = best.b.kh;
+      $('sub').textContent = best.b.kh + (info.exempt ? ' · 🔓 Admin' : ' · ចម្ងាយអនុញ្ញាត ' + best.b.radius + 'm') + ' (សាខាជិតបំផុត)';
+    }
+  }
   function refresh() {
+    pickNearest();
     var pill = $('pill'), gpsOk = false;
     if (exempt()) {
       pill.className = 'pill ok';
@@ -190,7 +202,7 @@
     var photo = capture();
     try { tg.HapticFeedback.impactOccurred('medium'); } catch (e) {}
     $('shutter').innerHTML = '<span class="spin"></span>កំពុងកត់ត្រា…';
-    var body = { action: 'punch', evt: evt, photo: photo };
+    var body = { action: 'punch', evt: evt, photo: photo, branch: info && info.branch ? info.branch : wantBranch };
     if (fix) { body.lat = fix.lat; body.lon = fix.lon; body.acc = fix.acc; }
     call(body).then(function (r) {
       if (r.ok) {
@@ -211,7 +223,7 @@
 
   // Auto-start only when permission was already granted earlier (no prompt needed) — otherwise wait for the tap.
   permState('camera').then(function (st) { if (st === 'granted') startAll(); });
-  call({ action: 'prep', evt: evt }).then(function (r) {
+  call({ action: 'prep', evt: evt, branch: wantBranch }).then(function (r) {
     if (!r.ok) { showMsg(r.msg, true); haptic('error'); return; }
     info = r; evt = r.evt;
     $('title').textContent = '📸 ' + r.evtKh + ' — ' + r.name;
